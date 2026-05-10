@@ -1,3 +1,6 @@
+<img width="1503" height="994" alt="image" src="https://github.com/user-attachments/assets/9ed72c05-90ff-4c5b-809e-28450abbd383" />
+
+
 # TabOut
 
 > 🚀 基于 [tab-out](https://github.com/zarazhangrui/tab-out) 的二次创作版本，新增多项实用功能。
