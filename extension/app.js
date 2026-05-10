@@ -712,14 +712,22 @@ function _reflowNavList() {
 
   container.classList.remove('expanded');
 
-  const containerWidth = container.clientWidth;
+  // Temporarily show all chips and hide More to get accurate measurements.
+  // (Previously-hidden chips have offsetWidth 0, which breaks the count.)
+  chips.forEach(c => { c.style.display = 'inline-flex'; });
+  moreBtn.style.display = 'none';
+  void container.offsetHeight; // force reflow
+
+  // Use getBoundingClientRect for sub-pixel precision; subtract a small
+  // safety margin so rounding errors or scrollbar changes don't cause overflow.
+  const containerWidth = container.getBoundingClientRect().width - 8;
   const gap = 8;
 
   // First pass: assume no More button, count how many fit
   let totalWidth = 0;
   let visibleCount = 0;
   for (let i = 0; i < chips.length; i++) {
-    totalWidth += chips[i].offsetWidth + (i > 0 ? gap : 0);
+    totalWidth += chips[i].getBoundingClientRect().width + (i > 0 ? gap : 0);
     if (totalWidth > containerWidth) break;
     visibleCount++;
   }
@@ -734,14 +742,14 @@ function _reflowNavList() {
   // Need More button: temporarily show it to measure its width
   moreBtn.style.visibility = 'hidden';
   moreBtn.style.display = 'inline-flex';
-  const moreWidth = moreBtn.offsetWidth + gap;
+  const moreWidth = moreBtn.getBoundingClientRect().width + gap;
   moreBtn.style.visibility = '';
 
   // Second pass: reserve space for More button
   totalWidth = 0;
   visibleCount = 0;
   for (let i = 0; i < chips.length; i++) {
-    totalWidth += chips[i].offsetWidth + (i > 0 ? gap : 0);
+    totalWidth += chips[i].getBoundingClientRect().width + (i > 0 ? gap : 0);
     if (totalWidth > containerWidth - moreWidth) break;
     visibleCount++;
   }
@@ -1194,6 +1202,10 @@ document.addEventListener('click', async (e) => {
     const tabUrl = actionEl.dataset.tabUrl;
     if (!tabUrl) return;
 
+    // Mark that we're doing manual close animations BEFORE chrome.tabs.remove
+    // so scheduleRefresh() sees the flag and uses the long fallback delay.
+    _isManualCloseAnimating = true;
+
     // Close every open tab matching this URL, so duplicates vanish together.
     const allTabs = await chrome.tabs.query({});
     const matchIds = allTabs.filter(t => t.url === tabUrl).map(t => t.id);
@@ -1202,7 +1214,6 @@ document.addEventListener('click', async (e) => {
     playCloseSound();
 
     const chip = actionEl.closest('.page-chip');
-    const parentCard = chip ? chip.closest('.mission-card') : null;
     if (chip) {
       const rect = chip.getBoundingClientRect();
       shootConfetti(rect.left + rect.width / 2, rect.top + rect.height / 2);
@@ -1211,14 +1222,26 @@ document.addEventListener('click', async (e) => {
       chip.style.transform = 'scale(0.8)';
       setTimeout(() => {
         chip.remove();
+        let hasEmptyCard = false;
         document.querySelectorAll('.mission-card').forEach(c => {
           if (c.querySelectorAll('.page-chip[data-action="focus-tab"]').length === 0) {
             animateCardOut(c);
+            hasEmptyCard = true;
           } else {
             updateCardCounts(c);
           }
         });
         updateDashboardCounts();
+
+        // Wait for card-removal animation (300 ms) if a card was emptied,
+        // then refresh immediately so the layout stays in sync.
+        const delay = hasEmptyCard ? 350 : 0;
+        setTimeout(() => {
+          clearTimeout(_tabRefreshTimer);
+          _isManualCloseAnimating = false;
+          if (_initialRenderDone) document.body.classList.add('no-entrance-anim');
+          renderDashboard();
+        }, delay);
       }, 200);
     }
 
@@ -1245,6 +1268,10 @@ document.addEventListener('click', async (e) => {
       return;
     }
 
+    // Mark manual-close flag BEFORE chrome.tabs.remove so scheduleRefresh
+    // sees it and uses the long fallback delay.
+    _isManualCloseAnimating = true;
+
     // Save the URL once, close every open tab matching it.
     const allTabs = await chrome.tabs.query({});
     const matchIds = allTabs.filter(t => t.url === tabUrl).map(t => t.id);
@@ -1258,14 +1285,24 @@ document.addEventListener('click', async (e) => {
       chip.style.transform = 'scale(0.8)';
       setTimeout(() => {
         chip.remove();
+        let hasEmptyCard = false;
         document.querySelectorAll('.mission-card').forEach(c => {
           if (c.querySelectorAll('.page-chip[data-action="focus-tab"]').length === 0) {
             animateCardOut(c);
+            hasEmptyCard = true;
           } else {
             updateCardCounts(c);
           }
         });
         updateDashboardCounts();
+
+        const delay = hasEmptyCard ? 350 : 0;
+        setTimeout(() => {
+          clearTimeout(_tabRefreshTimer);
+          _isManualCloseAnimating = false;
+          if (_initialRenderDone) document.body.classList.add('no-entrance-anim');
+          renderDashboard();
+        }, delay);
       }, 200);
     }
 
@@ -1341,6 +1378,10 @@ document.addEventListener('click', async (e) => {
     );
     if (!group) return;
 
+    // Mark manual-close flag BEFORE closing tabs so scheduleRefresh uses the
+    // long fallback delay and doesn't race with the card-out animation.
+    _isManualCloseAnimating = true;
+
     const urls = group.tabs.map(t => t.url);
     // Landing pages and custom groups share a hostname with other tabs, so we
     // must match exactly — not by hostname — to avoid closing unrelated tabs.
@@ -1353,6 +1394,14 @@ document.addEventListener('click', async (e) => {
     const idx = domainGroups.indexOf(group);
     if (idx !== -1) domainGroups.splice(idx, 1);
 
+    // Wait for the card-out animation (300 ms) then refresh immediately.
+    setTimeout(() => {
+      clearTimeout(_tabRefreshTimer);
+      _isManualCloseAnimating = false;
+      if (_initialRenderDone) document.body.classList.add('no-entrance-anim');
+      renderDashboard();
+    }, 350);
+
     const label = group.domain === '__landing-pages__'
       ? 'Homepages'
       : (group.label || friendlyDomain(group.domain));
@@ -1364,6 +1413,10 @@ document.addEventListener('click', async (e) => {
     const urls = (actionEl.dataset.dupeUrls || '').split(',')
       .map(u => decodeURIComponent(u)).filter(Boolean);
     if (urls.length === 0) return;
+
+    // Mark manual-close flag BEFORE closing tabs so scheduleRefresh uses the
+    // long fallback delay and doesn't race with the badge-fade animation.
+    _isManualCloseAnimating = true;
 
     await closeDuplicateTabs(urls, true);
     playCloseSound();
@@ -1380,7 +1433,19 @@ document.addEventListener('click', async (e) => {
         card.querySelectorAll('.chip-has-dupes').forEach(c => c.classList.remove('chip-has-dupes'));
         updateCardCounts(card);
         updateDashboardCounts();
+
+        // Badge-fade animation done — refresh immediately.
+        clearTimeout(_tabRefreshTimer);
+        _isManualCloseAnimating = false;
+        if (_initialRenderDone) document.body.classList.add('no-entrance-anim');
+        renderDashboard();
       }, 200);
+    } else {
+      // No card animation — refresh immediately.
+      clearTimeout(_tabRefreshTimer);
+      _isManualCloseAnimating = false;
+      if (_initialRenderDone) document.body.classList.add('no-entrance-anim');
+      renderDashboard();
     }
 
     showToast('Closed duplicates, kept one copy each');
@@ -1389,6 +1454,11 @@ document.addEventListener('click', async (e) => {
 
   if (action === 'close-all-open-tabs') {
     const allUrls = getRealTabs().map(t => t.url);
+
+    // Mark manual-close flag BEFORE closing tabs so scheduleRefresh uses the
+    // long fallback delay and doesn't race with the card-out animations.
+    _isManualCloseAnimating = true;
+
     await closeTabsByUrls(allUrls);
     playCloseSound();
 
@@ -1397,6 +1467,15 @@ document.addEventListener('click', async (e) => {
       shootConfetti(r.left + c.offsetWidth / 2, r.top + c.offsetHeight / 2);
       animateCardOut(c);
     });
+
+    // Wait for card-out animations (300 ms) then refresh immediately.
+    setTimeout(() => {
+      clearTimeout(_tabRefreshTimer);
+      _isManualCloseAnimating = false;
+      if (_initialRenderDone) document.body.classList.add('no-entrance-anim');
+      renderDashboard();
+    }, 350);
+
     showToast('All tabs closed. Fresh start.');
     return;
   }
@@ -1561,14 +1640,20 @@ function applyTheme(theme) {
 
 let _tabRefreshTimer = null;
 let _initialRenderDone = false;
+let _isManualCloseAnimating = false;
 
 function scheduleRefresh() {
   clearTimeout(_tabRefreshTimer);
+  // If a manual close animation is in progress, use a long fallback so the
+  // animation callback has time to call renderDashboard() itself. Otherwise
+  // use the normal 300 ms debounce for tab creation/updates.
+  const delay = _isManualCloseAnimating ? 800 : 300;
   _tabRefreshTimer = setTimeout(() => {
+    _isManualCloseAnimating = false;
     // Suppress entrance animations on re-renders so cards don't flicker.
     if (_initialRenderDone) document.body.classList.add('no-entrance-anim');
     renderDashboard();
-  }, 300);
+  }, delay);
 }
 
 if (typeof chrome !== 'undefined' && chrome.tabs) {
