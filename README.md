@@ -1,5 +1,9 @@
 <img width="1503" height="994" alt="image" src="https://github.com/user-attachments/assets/9ed72c05-90ff-4c5b-809e-28450abbd383" />
 
+---
+
+<img width="1729" height="944" alt="1-2" src="https://github.com/user-attachments/assets/08119bd8-9c14-44f9-81b3-f026216fbe14" />
+
 
 # TabOut
 
